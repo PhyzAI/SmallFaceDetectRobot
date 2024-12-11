@@ -1,3 +1,5 @@
+// Minimal AprilTags detector, converted from Python by ChatGPT
+
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import org.openftc.easyopencv.OpenCvCamera;
