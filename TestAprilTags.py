@@ -1,3 +1,5 @@
+# Minimal AprilTags detector
+
 from picamera2 import Picamera2
 from pupil_apriltags import Detector
 import cv2
