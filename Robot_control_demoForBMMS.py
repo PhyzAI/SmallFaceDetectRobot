@@ -66,6 +66,12 @@ def move_backward(steps=50, motor_slow_factor=1):
 
 ######### Face Detect ################
 
+def check_for_faces(image, face_detector):
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    faces = face_detector(image_rgb, 0)
+    return faces
+    
+
 def find_closest_face(faces, image_mid_x, image_mid_y):
     face_num = -1
     face_dist = 9999
@@ -80,11 +86,6 @@ def find_closest_face(faces, image_mid_x, image_mid_y):
             face_dist = int(this_face_dist)
             face_num = current_face
     return face_num
-    
-def check_for_faces(image, face_detector):
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    faces = face_detector(image_rgb, 0)
-    return faces
     
 
 ########################### MAIN #######################
@@ -122,7 +123,8 @@ def run_robot():
         clock.tick(30)  # Set frame rate of 30 fps
         
         # Use ultrasonic face_detector to check for distance to the ground
-        cliff_detect_distance = ud.distance()
+        #cliff_detect_distance = ud.distance()
+        cliff_detect_distance = 3
     
         # get an image from the camera
         image = camera.capture_array()
