@@ -15,13 +15,13 @@ from RpiMotorLib import RpiMotorLib
 import concurrent.futures
 import Ultrasonic_distance as ud
 import pygame
-from pyapriltags import Detector
+from pupil_apriltags import Detector
 
 
 from pprint import *
 
 debug = True  # Show extra info
-enable_MC = False  # enable Motor Controls
+enable_MC = True  # enable Motor Controls
 enable_fwd_back = True  # enable moving forwards/backwards (otherwise just turn)
 
 # Camera Image Parameters
@@ -66,7 +66,7 @@ def move_backward(steps=50, motor_slow_factor=1):
 
 ######### Face Detect ################
 
-def find_closest_face(faces, image_mid_x, image_mid_y):
+def find_closest_face(faces, setpoint_x, setpoint_y):
     face_num = -1
     face_dist = 9999
     current_face = -1
@@ -74,8 +74,8 @@ def find_closest_face(faces, image_mid_x, image_mid_y):
         current_face += 1
         face_mid_x = (rect.left() + rect.right()) // 2
         face_mid_y = (rect.top() + rect.bottom()) // 2
-        this_face_dist = math.sqrt((face_mid_x - image_mid_x)**2 +
-                         (face_mid_y - image_mid_y)**2)
+        this_face_dist = math.sqrt((face_mid_x - setpoint_x)**2 +
+                         (face_mid_y - setpoint_y)**2)
         if this_face_dist < face_dist:
             face_dist = int(this_face_dist)
             face_num = current_face
@@ -90,30 +90,27 @@ def check_for_faces(image, face_detector):
 ########################### MAIN #######################
     
 def run_robot():
-    
-    face_detector = dlib.get_frontal_face_detector()
         
     # Set up the PiCamera
     camera = Picamera2()
-    #pprint(camera.sensor_modes)
     preview_config = camera.create_preview_configuration()
-    preview_config['transform'] = libcamera.Transform(vflip=1, hflip=0)
     preview_config['main']={"format": 'RGB888', "size": image_dim} # 1296, 927; (1280, 960)}  #1296,972
     camera.configure(preview_config)
     camera.start(show_preview=False)
     
-    # Point to move desired face to
-    image_mid_x = image_dim[0]//2
-    image_mid_y = image_dim[1]//2
+    # Point to move desired tag to
+    setpoint_x = image_dim[0]//2
+    setpoint_y = image_dim[1]//2
     
-    # Search parameters when looking for a face
+    # Search parameters when looking for a tag
     scan_speed = 3
-    scan_amount = 10
-    num_search_steps = 20
-    last_search_step = 0  # keep track of where we are in the search
-
-    FACE_DET_TTL = 15  # Number of frames to wait before starting to look for a new face
-    face_time_to_live = 0  # counter for current face
+    scan_amount = 25
+    
+    TAG_DET_TTL = 15  # Number of frames to wait before starting to look for a new tag
+    tag_time_to_live = 0  # counter for current face
+    
+    # Create Tag detector
+    detector = Detector(families = "tag36h11") #, quad_decimate=2.0)
     
     clock = pygame.time.Clock()
     
@@ -121,42 +118,44 @@ def run_robot():
         
         clock.tick(30)  # Set frame rate of 30 fps
         
-        # Use ultrasonic face_detector to check for distance to the ground
-        cliff_detect_distance = ud.distance()
-    
         # get an image from the camera
         image = camera.capture_array()
-        #image = cv2.resize(image, dsize=None, fx=image_scale, fy=image_scale)
+        image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        
+        # Look for tags
+        tags = detector.detect(image_gray)
+        
+        # Display the tags found
+        for tag in tags:
+            corners = [(int(pt[0]), int(pt[1])) for pt in tag.corners]
+            for i in range(4):
+                cv2.line(image, corners[i], corners[(i + 1) % 4], (0, 255, 0), 2)
 
-        faces = check_for_faces (image, face_detector)
-        if len(faces) > 0:
-            face_time_to_live = FACE_DET_TTL
+        # Set frame counter in case tag image lost for a moment
+        if len(tags) > 0:
+            tag_time_to_live = TAG_DET_TTL
         else:
-            face_time_to_live -= 1
+            tag_time_to_live -= 1
+
        
-        if (face_time_to_live <= 0) and enable_MC:  # Start Searching left and right
-            print(f"last direction: {last_search_step}")
-            if (last_search_step < num_search_steps//4) or (last_search_step >= 3*num_search_steps//4): 
-                turn_left(scan_amount,scan_speed)
-                if debug: print("searching left")
-            else:
-                turn_right(scan_amount,scan_speed)
-                if debug: print("searching right")
-            last_search_step = (last_search_step + 1) % num_search_steps               
+        if (tag_time_to_live <= 0) and enable_MC:  # No Tag found, search
+            turn_left(scan_amount,scan_speed)
                 
-        elif (len(faces) > 0) and enable_MC: # Turn/move towards the face (or away, if too close)
-            closest_face = find_closest_face(faces, image_mid_x, image_mid_y)
-            rect = faces[closest_face]
-            face_mid_x = (rect.left() + rect.right()) // 2
-            face_mid_y = (rect.top() + rect.bottom()) // 2
-            face_width = rect.right() - rect.left()
+        elif (len(tags) > 0) and enable_MC: # Turn/move towards the face (or away, if too close)
+            tag = tags[0]  # Just use first tag. 
+            tag_mid_x = int(tag.center[0])
+            tag_mid_y = int(tag.center[1])
                    
-            diff_deg = (face_mid_x - image_mid_x)/image_mid_x * (FOV/2)
+            diff_deg = (tag_mid_x - setpoint_x)/setpoint_x * (FOV/2)
             steps = -int((motor_steps_per_rev/360)*diff_deg)
             if debug: print(f"steps: {steps}")
             
+            x_points = [int(pt[0]) for pt in tag.corners]
+            tag_width = max(x_points) - min(x_points)
+            if debug: print("tag width: ", tag_width)
+            
             # define how close we can get to the desired face
-            face_width_thresh = (150/240)*image_mid_x   # Determine experimentally
+            tag_width_thresh = 300 #int((235/240)*setpoint_x)   # Determine experimentally
             
             min_steps = 2  # Don't move if close enough
             if steps > min_steps: # Turn to the left
@@ -165,23 +164,17 @@ def run_robot():
             elif steps < -min_steps:  # Turn to the right
                 if debug: print("right: ", steps)
                 turn_right(abs(steps))
-            elif face_width > face_width_thresh:
+            elif tag_width > 1.05*tag_width_thresh: # Move Backwards
                 if debug: print("Backwards")
-                if enable_fwd_back: move_backward(75,2)
-            elif cliff_detect_distance < 10.0 and face_width < face_width_thresh:
+                if enable_fwd_back: move_backward(50,3)
+            elif tag_width < tag_width_thresh: # Move Forwards
                 if debug: print("Forwards")
-                if enable_fwd_back: move_forward(25,2)
+                if enable_fwd_back: move_forward(200,1)
             else:
                 pass
-
-        # Draw face rectangles
-        for rect in faces:
-            cv2.rectangle(image,
-                (rect.left(),rect.top()),
-                (rect.right(), rect.bottom()),
-                (255, 0, 0), 2)
                     
-                # Display the frame                
+        # Display the frame
+        image = cv2.flip(image, 0) # Can't flip at top of loop for some odd reason
         cv2.imshow("Camera", image)                
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
